@@ -87,18 +87,12 @@ details p{margin-top:8px;color:var(--muted)}
 .phone{font:500 clamp(26px,6vw,40px) var(--mono);user-select:all;overflow-wrap:anywhere}
 footer{padding-block:28px;color:var(--muted);font-size:14px}
 .float{position:fixed;right:max(16px,env(safe-area-inset-right,0px));bottom:calc(16px + env(safe-area-inset-bottom,0px));z-index:4;background:var(--wa);color:#04210f;padding:12px 16px;border-radius:4px;font-weight:600;text-decoration:none}
-.bg3d{position:fixed;inset:0;z-index:-1;overflow:hidden;pointer-events:none;perspective:700px}
-.scene,.word{position:absolute;left:50%;top:50%;width:0;height:0;transform-style:preserve-3d}
-.scene{will-change:transform}
-.wall{position:absolute;background-color:#0b1524;background-image:linear-gradient(rgba(255,194,71,.28) 2px,transparent 2px),linear-gradient(90deg,rgba(255,194,71,.28) 2px,transparent 2px);background-size:140px 140px}
-.wall.side{width:6000px;height:1000px;left:-3000px;top:-500px}
-.wall.flat{width:1600px;height:6000px;left:-800px;top:-3000px}
-.word span{position:absolute;left:0;top:0;font:800 300px/1 var(--display);white-space:nowrap;user-select:none}
+.bg3d{position:fixed;inset:0;z-index:-1;overflow:hidden;pointer-events:none}
+.bg3d canvas{display:block;width:100%;height:100%}
 .fog{position:absolute;inset:0;background:radial-gradient(circle at center,rgba(14,26,43,.92) 0,rgba(14,26,43,.35) 45%,transparent 75%)}
 section{background:rgba(14,26,43,.78);scroll-margin-top:90px}
 #inicio{background:none}
 footer{background:var(--ink)}
-.hero{will-change:transform}
 #float{background:var(--accent);color:var(--accent-ink)}
 .float.wafloat{bottom:calc(68px + env(safe-area-inset-bottom,0px))}
 @media (max-width:520px){.float{text-align:center;width:calc(50% - 22px)}.float.wafloat{bottom:calc(16px + env(safe-area-inset-bottom,0px));right:auto;left:max(16px,env(safe-area-inset-left,0px))}footer{padding-bottom:84px}}
@@ -109,7 +103,7 @@ h1{text-shadow:1px 1px 0 #c98f22,2px 2px 0 #b57f1c,3px 3px 0 #a06f17,4px 4px 0 #
 
 </head>
 <body>
-<div class="bg3d" aria-hidden="true"><div class="scene" id="scene"></div><div class="fog"></div></div>
+<div class="bg3d" aria-hidden="true"><canvas id="bg"></canvas><div class="fog"></div></div>
 <header><div class="wrap bar">
   <a class="logo" href="#inicio">ZUNO</a>
   <nav aria-label="Secciones">
@@ -288,46 +282,64 @@ $("copy").addEventListener("click", async e => {
 });
 render();
 
-/* Recorrido en profundidad: al bajar por la página, la cámara avanza por el túnel. */
+/* Recorrido en profundidad dibujado en un solo lienzo, liviano para celulares. */
 (function () {
-  const scene = $("scene"), hero = document.querySelector(".hero");
+  const cv = $("bg"), ctx = cv.getContext && cv.getContext("2d");
+  if (!ctx) return;
+  const hero = document.querySelector(".hero");
   const still = matchMedia("(prefers-reduced-motion: reduce)").matches;
-  const TRAVEL = 3600, LAYERS = 8;
-  [["translate3d(-800px,0,-2600px) rotateY(90deg)", "side"], ["translate3d(800px,0,-2600px) rotateY(90deg)", "side"],
-   ["translate3d(0,500px,-2600px) rotateX(90deg)", "flat"], ["translate3d(0,-500px,-2600px) rotateX(90deg)", "flat"]]
-    .forEach(([t, k]) => { const w = document.createElement("div"); w.className = "wall " + k; w.style.transform = t; scene.append(w); });
-  const words = [[0, -700], [-420, -1900], [420, -3100], [0, -4300]].map(([x, z]) => {
-    const w = document.createElement("div");
-    w.className = "word";
-    w.style.transform = `translate3d(${x}px,0,${z}px)`;
-    for (let i = 0; i < LAYERS; i++) {
-      const s = document.createElement("span");
-      s.textContent = "ZUNO";
-      s.style.transform = `translate(-50%,-50%) translateZ(${-i * 7}px)`;
-      s.style.color = i === 0 ? "#35608f" : `hsl(38,75%,${46 - i * 4}%)`;
-      w.append(s);
+  const canTilt = matchMedia("(hover: hover)").matches && !still;
+  const TRAVEL = 3600, FAR = 5600, HW = 800, HH = 500;
+  const WORDS = [[0, 1000], [-420, 2200], [420, 3400], [0, 4600]];
+  const FONT = '"Bricolage Grotesque","Arial Black",sans-serif';
+  let W = 0, H = 0, f = 700, dirty = true;
+  let mx = 0, my = 0, cx = 0, cy = 0, cam = still ? 0 : -1400;
+  function size() {
+    const r = Math.min(devicePixelRatio || 1, 1.5);
+    W = innerWidth; H = innerHeight; f = Math.min(700, W * 1.6);
+    cv.width = Math.round(W * r); cv.height = Math.round(H * r);
+    ctx.setTransform(r, 0, 0, r, 0, 0); dirty = true;
+  }
+  function draw() {
+    ctx.fillStyle = "#0b1524"; ctx.fillRect(0, 0, W, H);
+    const ox = W / 2, oy = H / 2, px = cx * 120, py = cy * 80;
+    const P = (x, y, d) => { const s = f / d; return [ox + (x - px) * s, oy + (y - py) * s]; };
+    ctx.lineWidth = 1;
+    const seg = (a, b, alpha) => { ctx.strokeStyle = `rgba(255,194,71,${alpha})`; ctx.beginPath(); ctx.moveTo(a[0], a[1]); ctx.lineTo(b[0], b[1]); ctx.stroke(); };
+    for (let z = Math.ceil((cam + 80) / 400) * 400; z - cam < FAR; z += 400) {
+      const d = z - cam, al = (.34 * (1 - d / FAR)).toFixed(3);
+      const a = P(-HW, -HH, d), b = P(HW, HH, d);
+      ctx.strokeStyle = `rgba(255,194,71,${al})`; ctx.strokeRect(a[0], a[1], b[0] - a[0], b[1] - a[1]);
     }
-    scene.append(w);
-    return { el: w, z };
-  });
-  let mx = 0, my = 0, cx = 0, cy = 0, cz = still ? 0 : -1400, last = "";
-  addEventListener("pointermove", e => { mx = e.clientX / innerWidth * 2 - 1; my = e.clientY / innerHeight * 2 - 1; }, { passive: true });
+    for (let x = -HW; x <= HW; x += 400) { seg(P(x, HH, 80), P(x, HH, FAR), .2); seg(P(x, -HH, 80), P(x, -HH, FAR), .2); }
+    for (let y = -HH + 250; y < HH; y += 250) { seg(P(-HW, y, 80), P(-HW, y, FAR), .2); seg(P(HW, y, 80), P(HW, y, FAR), .2); }
+    ctx.textAlign = "center"; ctx.textBaseline = "middle";
+    WORDS.slice().reverse().forEach(([x, z]) => {
+      const d = z - cam;
+      if (d < 180 || d > FAR) return;
+      for (let i = 5; i >= 0; i--) {
+        const dd = d + i * 14, s = f / dd, p = P(x, 0, dd);
+        ctx.font = `800 ${Math.round(300 * s)}px ${FONT}`;
+        ctx.fillStyle = i === 0 ? "#35608f" : `hsl(38,75%,${48 - i * 5}%)`;
+        ctx.fillText("ZUNO", p[0], p[1]);
+      }
+    });
+  }
   function frame() {
     const max = Math.max(1, document.documentElement.scrollHeight - innerHeight);
-    const tz = scrollY / max * TRAVEL;
-    const k = still ? 1 : .07;
-    cz += (tz - cz) * k; cx += (mx - cx) * k; cy += (my - cy) * k;
-    const t = `translateZ(${cz.toFixed(1)}px) rotateX(${(-cy * 6).toFixed(2)}deg) rotateY(${(cx * 9).toFixed(2)}deg)`;
-    if (t !== last) {
-      scene.style.transform = t;
-      hero.style.transform = `perspective(1000px) rotateX(${(-cy * 3).toFixed(2)}deg) rotateY(${(cx * 4).toFixed(2)}deg)`;
-      words.forEach(w => { w.el.style.visibility = w.z + cz > 450 ? "hidden" : "visible"; });
-      last = t;
+    const tz = scrollY / max * TRAVEL, k = still ? 1 : .08;
+    const dz = tz - cam, dx = mx - cx, dy = my - cy;
+    if (dirty || Math.abs(dz) > .5 || Math.abs(dx) > .002 || Math.abs(dy) > .002) {
+      cam += dz * k; cx += dx * k; cy += dy * k;
+      draw(); dirty = false;
+      if (canTilt) hero.style.transform = `perspective(1000px) rotateX(${(-cy * 3).toFixed(2)}deg) rotateY(${(cx * 4).toFixed(2)}deg)`;
     }
-    if (!still) requestAnimationFrame(frame);
+    requestAnimationFrame(frame);
   }
-  frame();
-  if (still) addEventListener("scroll", frame, { passive: true });
+  if (canTilt) addEventListener("pointermove", e => { mx = e.clientX / W * 2 - 1; my = e.clientY / H * 2 - 1; }, { passive: true });
+  addEventListener("resize", size);
+  if (document.fonts && document.fonts.ready) document.fonts.ready.then(() => { dirty = true; });
+  size(); frame();
 })();
 </script>
 
